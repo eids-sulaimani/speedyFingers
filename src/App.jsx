@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
 const DURATION = 60
+const BEST_SCORE_KEY = 'speedyfingers.personalBest.v1'
 
 const WORDS = `
   about after again air all also always another any around
@@ -34,6 +35,68 @@ function generateWords(count = 200) {
   ).join(' ')
 }
 
+function readPersonalBest() {
+  try {
+    const stored = localStorage.getItem(BEST_SCORE_KEY)
+
+    if (stored === null) return null
+
+    const score = JSON.parse(stored)
+
+    return Number.isInteger(score) && score >= 0 ? score : null
+  } catch {
+    return null
+  }
+}
+
+function SkeletonHand({ className }) {
+  return (
+    <svg
+      className={`skeleton-hand ${className}`}
+      viewBox="0 0 120 180"
+      fill="none"
+      aria-hidden="true"
+    >
+      <g
+        stroke="currentColor"
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* Finger bones */}
+        <path d="M35 82 L30 64 M28 57 L24 42 M22 35 L20 25" />
+        <path d="M51 72 L49 49 M48 42 L46 25 M45 18 L44 9" />
+        <path d="M68 70 L69 45 M69 38 L70 21 M70 14 L70 5" />
+        <path d="M84 77 L89 56 M91 49 L95 34 M97 27 L100 19" />
+
+        {/* Thumb bones */}
+        <path d="M33 117 L20 103 M16 97 L10 85 M8 79 L6 70" />
+
+        {/* Palm bones */}
+        <path d="M36 91 L48 130" />
+        <path d="M52 81 L57 130" />
+        <path d="M68 79 L67 130" />
+        <path d="M82 86 L76 130" />
+        <path d="M39 122 L45 133" />
+
+        {/* Wrist bones */}
+        <path d="M47 140 L53 144 M63 140 L69 144 M77 139 L80 143" />
+
+        {/* Forearm bones */}
+        <path d="M54 152 L52 175 M73 152 L78 175" />
+      </g>
+
+      <g fill="currentColor">
+        <circle cx="34" cy="86" r="3.5" />
+        <circle cx="52" cy="76" r="3.5" />
+        <circle cx="68" cy="74" r="3.5" />
+        <circle cx="83" cy="81" r="3.5" />
+        <circle cx="35" cy="120" r="3.5" />
+      </g>
+    </svg>
+  )
+}
+
 function App() {
   const [passage, setPassage] = useState(generateWords)
   const [typed, setTyped] = useState('')
@@ -41,12 +104,13 @@ function App() {
   const [remaining, setRemaining] = useState(DURATION)
   const [attempts, setAttempts] = useState(0)
   const [correctAttempts, setCorrectAttempts] = useState(0)
+  const [savedBest, setSavedBest] = useState(readPersonalBest)
 
   const deadlineRef = useRef(null)
   const typingRef = useRef(null)
   const caretRef = useRef(null)
 
-  // Use a deadline so delayed timer updates do not extend the test.
+  // A deadline keeps delayed timer updates from extending the test.
   useEffect(() => {
     if (status !== 'running') return
 
@@ -68,7 +132,7 @@ function App() {
     return () => window.clearInterval(interval)
   }, [status])
 
-  // Keep the current character visible inside the typing area.
+  // Scroll within the typing area as the current character moves.
   useEffect(() => {
     const area = typingRef.current
     const caret = caretRef.current
@@ -85,6 +149,47 @@ function App() {
       area.scrollTop += caretBounds.top - areaBounds.top - 45
     }
   }, [typed])
+
+  const elapsed = DURATION - remaining
+
+  const correctCharacters = Array.from(typed).reduce(
+    (total, character, index) =>
+      total + (character === passage[index] ? 1 : 0),
+    0,
+  )
+
+  const wpm = elapsed > 0
+    ? Math.round(correctCharacters / 5 / (elapsed / 60))
+    : 0
+
+  const accuracy = attempts > 0
+    ? Math.round((correctAttempts / attempts) * 100)
+    : 100
+
+  const mistakes = attempts - correctAttempts
+
+  // Use the exact ratio for eligibility, rather than rounded accuracy.
+  const qualifiesForBest =
+    status === 'finished' &&
+    attempts > 0 &&
+    correctAttempts / attempts >= 0.9
+
+  const personalBest = qualifiesForBest
+    ? Math.max(savedBest ?? 0, wpm)
+    : savedBest
+
+  const isNewBest =
+    qualifiesForBest && (savedBest === null || wpm > savedBest)
+
+  useEffect(() => {
+    if (personalBest === null) return
+
+    try {
+      localStorage.setItem(BEST_SCORE_KEY, JSON.stringify(personalBest))
+    } catch {
+      // The test still works if browser storage is unavailable.
+    }
+  }, [personalBest])
 
   function handleKeyDown(event) {
     if (
@@ -133,13 +238,13 @@ function App() {
 
     setTyped((previous) => previous + event.key)
 
-    // Add more words before the user reaches the end.
     if (passage.length - typed.length < 300) {
       setPassage((previous) => `${previous} ${generateWords(100)}`)
     }
   }
 
   function restartTest() {
+    setSavedBest(personalBest)
     deadlineRef.current = null
     setPassage(generateWords())
     setTyped('')
@@ -148,30 +253,14 @@ function App() {
     setAttempts(0)
     setCorrectAttempts(0)
 
-    if (typingRef.current) {
-      typingRef.current.scrollTop = 0
-      typingRef.current.focus()
-    }
+    // Focus after React restores the typing area from the results view.
+    window.requestAnimationFrame(() => {
+      if (typingRef.current) {
+        typingRef.current.scrollTop = 0
+        typingRef.current.focus()
+      }
+    })
   }
-
-  const elapsed = DURATION - remaining
-
-  // Only characters currently correct in the passage contribute to WPM.
-  const correctCharacters = Array.from(typed).reduce(
-    (total, character, index) =>
-      total + (character === passage[index] ? 1 : 0),
-    0,
-  )
-
-  const wpm = elapsed > 0
-    ? Math.round(correctCharacters / 5 / (elapsed / 60))
-    : 0
-
-  const accuracy = attempts > 0
-    ? Math.round((correctAttempts / attempts) * 100)
-    : 100
-
-  const mistakes = attempts - correctAttempts
 
   const statusLabel = {
     ready: 'SYSTEM READY',
@@ -179,8 +268,23 @@ function App() {
     finished: 'TEST COMPLETE',
   }[status]
 
+  // Calculate each word's starting position once per render.
+  const passageWords = []
+  let position = 0
+
+  for (const word of passage.split(' ')) {
+    passageWords.push({ word, start: position })
+    position += word.length + 1
+  }
+
   return (
     <div className="app">
+      <div className="background-hands" aria-hidden="true">
+        <SkeletonHand className="hand-one" />
+        <SkeletonHand className="hand-two" />
+        <SkeletonHand className="hand-three" />
+      </div>
+
       <header className="site-header">
         <a className="brand" href="./" aria-label="SpeedyFingers home">
           <span className="brand-icon" aria-hidden="true">&gt;_</span>
@@ -234,17 +338,33 @@ function App() {
                 {status === 'ready' ? '—' : `${accuracy}%`}
               </span>
             </div>
+
+            <div className="stat">
+              <span className="stat-label">PERSONAL BEST</span>
+              <span className="stat-value">
+                {personalBest === null ? '—' : personalBest}
+                {personalBest !== null && (
+                  <span className="unit">wpm</span>
+                )}
+              </span>
+            </div>
           </div>
 
           {status === 'finished' ? (
             <div className="results" role="status">
               <p className="eyebrow">SESSION COMPLETE</p>
               <h2>Your time is up.</h2>
+
               <p>
                 {wpm} WPM · {accuracy}% accuracy · {mistakes} mistakes
               </p>
+
               <p className="results-note">
-                Take a breath, then try another round.
+                {!qualifiesForBest
+                  ? 'Reach at least 90% accuracy to qualify for a personal best.'
+                  : isNewBest
+                    ? 'New personal best. Your next challenge: beat it.'
+                    : 'Session complete. Try another round to beat your best.'}
               </p>
             </div>
           ) : (
@@ -266,35 +386,31 @@ function App() {
                 spellCheck={false}
               >
                 <p className="words">
-                  {passage.split(' ').map((word, wordIndex) => {
-                    const start = passage
-                      .split(' ')
-                      .slice(0, wordIndex)
-                      .join(' ').length + (wordIndex > 0 ? 1 : 0)
+                  {passageWords.map(({ word, start }) => {
+                    const hasSpace = start + word.length < passage.length
+                    const characters = word + (hasSpace ? ' ' : '')
 
                     return (
-                      <span className="word" key={wordIndex}>
-                        {Array.from(
-                          word + (
-                            start + word.length < passage.length ? ' ' : ''
-                          ),
-                        ).map((character, index) => {
-                          const position = start + index
+                      <span className="word" key={start}>
+                        {Array.from(characters).map((character, index) => {
+                          const characterPosition = start + index
+                          const isCurrent =
+                            characterPosition === typed.length
+
                           let className = 'character'
 
-                          if (position < typed.length) {
-                            className += typed[position] === character
-                              ? ' correct'
-                              : ' incorrect'
+                          if (characterPosition < typed.length) {
+                            className +=
+                              typed[characterPosition] === character
+                                ? ' correct'
+                                : ' incorrect'
                           }
-
-                          const isCurrent = position === typed.length
 
                           if (isCurrent) className += ' current'
 
                           return (
                             <span
-                              key={position}
+                              key={characterPosition}
                               className={className}
                               ref={isCurrent ? caretRef : null}
                             >
@@ -313,7 +429,7 @@ function App() {
           <div className="test-footer controls">
             <span>
               {status === 'finished'
-                ? 'Restart for a fresh set of words.'
+                ? 'Personal bests require at least 90% accuracy.'
                 : 'Backspace to correct · Timer continues when unfocused'}
             </span>
 
