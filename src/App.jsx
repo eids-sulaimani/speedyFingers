@@ -1,121 +1,76 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
 import './App.css'
 
-function App() {
-  const [count, setCount] = useState(0)
+const previewWords =
+  'the world feels quiet as you begin another small journey through the words on your screen'
 
+function App() {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
+    <div className="app">
+      <header className="site-header">
+        <a className="brand" href="./" aria-label="SpeedyFingers home">
+          <span className="brand-icon" aria-hidden="true">&gt;_</span>
+          speedy<span>fingers</span>
+        </a>
+
+        <span className="terminal-status">
+          <span className="status-light" />
+          SYSTEM READY
+        </span>
+      </header>
+
+      <main className="test-container">
+        <div className="test-heading">
+          <p className="eyebrow">SPEEDYFINGERS // TYPING TEST</p>
+          <h1>Let your fingers do the talking.</h1>
+          <p className="description">
+            Everyday words. Sixty seconds. Find your rhythm.
           </p>
         </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
 
-      <div className="ticks"></div>
+        <section className="test-panel" aria-label="Typing test preview">
+          <div className="test-toolbar">
+            <span className="mode-label">ENGLISH / 60 SECONDS</span>
+            <span className="preview-label">LAYOUT PREVIEW</span>
+          </div>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+          <div className="stats">
+            <div className="stat">
+              <span className="stat-label">TIME LEFT</span>
+              <span className="stat-value timer">
+                60<span className="unit">s</span>
+              </span>
+            </div>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+            <div className="stat">
+              <span className="stat-label">WORDS / MIN</span>
+              <span className="stat-value">—</span>
+            </div>
+
+            <div className="stat">
+              <span className="stat-label">ACCURACY</span>
+              <span className="stat-value">—</span>
+            </div>
+          </div>
+
+          <div className="typing-area">
+            <p className="words">{previewWords}</p>
+          </div>
+
+          <div className="test-footer">
+            <span>Typing controls will be connected next.</span>
+          </div>
+        </section>
+
+        <p className="bottom-note">
+          TAKE A BREATH. FIND YOUR PACE.
+        </p>
+      </main>
+
+      <footer className="site-footer">
+        <span>SPEEDYFINGERS</span>
+        <span>Built one keystroke at a time.</span>
+      </footer>
+    </div>
   )
 }
 
