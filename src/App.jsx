@@ -105,10 +105,13 @@ function App() {
   const [attempts, setAttempts] = useState(0)
   const [correctAttempts, setCorrectAttempts] = useState(0)
   const [savedBest, setSavedBest] = useState(readPersonalBest)
+  const [soundEnabled, setSoundEnabled] = useState(false)
+  const [soundVolume, setSoundVolume] = useState(30)
 
   const deadlineRef = useRef(null)
   const typingRef = useRef(null)
   const caretRef = useRef(null)
+  const audioContextRef = useRef(null)
 
   // A deadline keeps delayed timer updates from extending the test.
   useEffect(() => {
@@ -132,7 +135,7 @@ function App() {
     return () => window.clearInterval(interval)
   }, [status])
 
-  // Scroll within the typing area as the current character moves.
+  // Keep the current character visible inside the typing area.
   useEffect(() => {
     const area = typingRef.current
     const caret = caretRef.current
@@ -149,6 +152,18 @@ function App() {
       area.scrollTop += caretBounds.top - areaBounds.top - 45
     }
   }, [typed])
+
+  // Close the audio context when this component is removed.
+  useEffect(() => {
+    return () => {
+      const context = audioContextRef.current
+      audioContextRef.current = null
+
+      if (context && context.state !== 'closed') {
+        void context.close().catch(() => {})
+      }
+    }
+  }, [])
 
   const elapsed = DURATION - remaining
 
@@ -168,7 +183,7 @@ function App() {
 
   const mistakes = attempts - correctAttempts
 
-  // Use the exact ratio for eligibility, rather than rounded accuracy.
+  // Check the exact ratio instead of the rounded display value.
   const qualifiesForBest =
     status === 'finished' &&
     attempts > 0 &&
@@ -190,6 +205,100 @@ function App() {
       // The test still works if browser storage is unavailable.
     }
   }, [personalBest])
+
+  async function playTypingSound(type) {
+    if (!soundEnabled || soundVolume === 0) return
+
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new window.AudioContext()
+      }
+
+      const context = audioContextRef.current
+
+      if (context.state === 'suspended') {
+        await context.resume()
+      }
+
+      if (context.state !== 'running') return
+
+      const now = context.currentTime
+      const volume = soundVolume / 100
+
+      if (type === 'incorrect') {
+        // A short electrical buzz for a mistake.
+        const oscillator = context.createOscillator()
+        const gain = context.createGain()
+
+        oscillator.type = 'sawtooth'
+        oscillator.frequency.setValueAtTime(130, now)
+        oscillator.frequency.exponentialRampToValueAtTime(
+          65,
+          now + 0.09,
+        )
+
+        gain.gain.setValueAtTime(volume * 0.09, now)
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1)
+
+        oscillator.connect(gain)
+        gain.connect(context.destination)
+
+        oscillator.onended = () => {
+          oscillator.disconnect()
+          gain.disconnect()
+        }
+
+        oscillator.start(now)
+        oscillator.stop(now + 0.11)
+        return
+      }
+
+      // Filtered noise creates a short keyboard click.
+      const duration = 0.035
+      const buffer = context.createBuffer(
+        1,
+        Math.ceil(context.sampleRate * duration),
+        context.sampleRate,
+      )
+
+      const samples = buffer.getChannelData(0)
+
+      for (let index = 0; index < samples.length; index += 1) {
+        samples[index] = Math.random() * 2 - 1
+      }
+
+      const source = context.createBufferSource()
+      const filter = context.createBiquadFilter()
+      const gain = context.createGain()
+
+      source.buffer = buffer
+
+      filter.type = 'lowpass'
+      filter.frequency.value =
+        type === 'backspace' ? 900 : 1800 + Math.random() * 700
+
+      gain.gain.setValueAtTime(volume * 0.16, now)
+      gain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        now + duration,
+      )
+
+      source.connect(filter)
+      filter.connect(gain)
+      gain.connect(context.destination)
+
+      source.onended = () => {
+        source.disconnect()
+        filter.disconnect()
+        gain.disconnect()
+      }
+
+      source.start(now)
+      source.stop(now + duration)
+    } catch {
+      // Typing still works if audio cannot start.
+    }
+  }
 
   function handleKeyDown(event) {
     if (
@@ -221,7 +330,19 @@ function App() {
     }
 
     if (isBackspace) {
-      setTyped((previous) => previous.slice(0, -1))
+      if (typed.length > 0 && !typed.endsWith(' ')) {
+        void playTypingSound('backspace')
+      }
+
+      setTyped((previous) => {
+        // Backspace cannot cross a submitted space.
+        if (previous.endsWith(' ')) {
+          return previous
+        }
+
+        return previous.slice(0, -1)
+      })
+
       return
     }
 
@@ -230,14 +351,19 @@ function App() {
       setStatus('running')
     }
 
+    const isCorrect = event.key === passage[typed.length]
+
+    void playTypingSound(isCorrect ? 'correct' : 'incorrect')
+
     setAttempts((previous) => previous + 1)
 
-    if (event.key === passage[typed.length]) {
+    if (isCorrect) {
       setCorrectAttempts((previous) => previous + 1)
     }
 
     setTyped((previous) => previous + event.key)
 
+    // Add more words before the user reaches the end.
     if (passage.length - typed.length < 300) {
       setPassage((previous) => `${previous} ${generateWords(100)}`)
     }
@@ -253,7 +379,7 @@ function App() {
     setAttempts(0)
     setCorrectAttempts(0)
 
-    // Focus after React restores the typing area from the results view.
+    // Wait for the typing area to return after the results screen.
     window.requestAnimationFrame(() => {
       if (typingRef.current) {
         typingRef.current.scrollTop = 0
@@ -268,7 +394,6 @@ function App() {
     finished: 'TEST COMPLETE',
   }[status]
 
-  // Calculate each word's starting position once per render.
   const passageWords = []
   let position = 0
 
@@ -287,14 +412,43 @@ function App() {
 
       <header className="site-header">
         <a className="brand" href="./" aria-label="SpeedyFingers home">
-          <span className="brand-icon" aria-hidden="true">&gt;_</span>
+          <span className="brand-icon" aria-hidden="true">
+            &gt;_
+          </span>
           speedy<span>fingers</span>
         </a>
 
-        <span className="terminal-status">
-          <span className="status-light" />
-          {statusLabel}
-        </span>
+        <div className="header-controls">
+          <div className="sound-controls">
+            <button
+              className="sound-toggle"
+              type="button"
+              aria-pressed={soundEnabled}
+              onClick={() => setSoundEnabled((previous) => !previous)}
+            >
+              Sound: {soundEnabled ? 'ON' : 'OFF'}
+            </button>
+
+            <label className="volume-control">
+              <span>Volume</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={soundVolume}
+                disabled={!soundEnabled}
+                onChange={(event) =>
+                  setSoundVolume(Number(event.target.value))
+                }
+              />
+            </label>
+          </div>
+
+          <span className="terminal-status">
+            <span className="status-light" />
+            {statusLabel}
+          </span>
+        </div>
       </header>
 
       <main className="test-container">
@@ -387,7 +541,9 @@ function App() {
               >
                 <p className="words">
                   {passageWords.map(({ word, start }) => {
-                    const hasSpace = start + word.length < passage.length
+                    const hasSpace =
+                      start + word.length < passage.length
+
                     const characters = word + (hasSpace ? ' ' : '')
 
                     return (
@@ -406,7 +562,9 @@ function App() {
                                 : ' incorrect'
                           }
 
-                          if (isCurrent) className += ' current'
+                          if (isCurrent) {
+                            className += ' current'
+                          }
 
                           return (
                             <span
@@ -430,7 +588,7 @@ function App() {
             <span>
               {status === 'finished'
                 ? 'Personal bests require at least 90% accuracy.'
-                : 'Backspace to correct · Timer continues when unfocused'}
+                : 'Space submits a word · Backspace corrects the current word'}
             </span>
 
             <button
