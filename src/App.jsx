@@ -4,6 +4,7 @@ import './App.css'
 const DURATION = 60
 const BEST_SCORE_KEY = 'speedyfingers.personalBest.v1'
 
+
 const WORDS = `
   about after again air all also always another any around
   ask away back because before begin best better between big
@@ -105,15 +106,45 @@ function App() {
   const [attempts, setAttempts] = useState(0)
   const [correctAttempts, setCorrectAttempts] = useState(0)
   const [savedBest, setSavedBest] = useState(readPersonalBest)
-  const [soundEnabled, setSoundEnabled] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(true)
   const [soundVolume, setSoundVolume] = useState(30)
 
   const deadlineRef = useRef(null)
   const typingRef = useRef(null)
   const caretRef = useRef(null)
-  const audioContextRef = useRef(null)
 
-  // A deadline keeps delayed timer updates from extending the test.
+  const audioContextRef = useRef(null)
+  const masterGainRef = useRef(null)
+  const soundGenerationRef = useRef(0)
+  const activeSoundsRef = useRef(new Set())
+
+  // Release the audio context when the component is removed.
+  useEffect(() => {
+    return () => {
+      soundGenerationRef.current += 1
+      const context = audioContextRef.current
+      audioContextRef.current = null
+      masterGainRef.current = null
+
+      if (context && context.state !== 'closed') {
+        void context.close().catch(() => {})
+      }
+    }
+  }, [])
+
+  // Apply the volume slider to all currently playing effects.
+  useEffect(() => {
+    const context = audioContextRef.current
+    const gain = masterGainRef.current
+
+    if (context && gain && context.state !== 'closed') {
+      gain.gain.setValueAtTime(
+        soundEnabled ? soundVolume / 100 : 0,
+        context.currentTime,
+      )
+    }
+  }, [soundEnabled, soundVolume])
+
   useEffect(() => {
     if (status !== 'running') return
 
@@ -135,7 +166,7 @@ function App() {
     return () => window.clearInterval(interval)
   }, [status])
 
-  // Keep the current character visible inside the typing area.
+  // Scroll inside the typing area rather than moving the whole page.
   useEffect(() => {
     const area = typingRef.current
     const caret = caretRef.current
@@ -152,18 +183,6 @@ function App() {
       area.scrollTop += caretBounds.top - areaBounds.top - 45
     }
   }, [typed])
-
-  // Close the audio context when this component is removed.
-  useEffect(() => {
-    return () => {
-      const context = audioContextRef.current
-      audioContextRef.current = null
-
-      if (context && context.state !== 'closed') {
-        void context.close().catch(() => {})
-      }
-    }
-  }, [])
 
   const elapsed = DURATION - remaining
 
@@ -183,7 +202,6 @@ function App() {
 
   const mistakes = attempts - correctAttempts
 
-  // Check the exact ratio instead of the rounded display value.
   const qualifiesForBest =
     status === 'finished' &&
     attempts > 0 &&
@@ -202,101 +220,152 @@ function App() {
     try {
       localStorage.setItem(BEST_SCORE_KEY, JSON.stringify(personalBest))
     } catch {
-      // The test still works if browser storage is unavailable.
+      // Keep the test working if browser storage is unavailable.
     }
   }, [personalBest])
+
+  function getAudioContext() {
+    if (!audioContextRef.current) {
+      const context = new window.AudioContext()
+      const masterGain = context.createGain()
+
+      masterGain.gain.value = soundEnabled ? soundVolume / 100 : 0
+      masterGain.connect(context.destination)
+
+      audioContextRef.current = context
+      masterGainRef.current = masterGain
+    }
+
+    return audioContextRef.current
+  }
+
+  function stopSounds() {
+    soundGenerationRef.current += 1
+
+    for (const source of activeSoundsRef.current) {
+      try {
+        source.stop()
+      } catch {
+        // The source may already have stopped.
+      }
+    }
+
+    activeSoundsRef.current.clear()
+  }
 
   async function playTypingSound(type) {
     if (!soundEnabled || soundVolume === 0) return
 
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new window.AudioContext()
-      }
+    const generation = soundGenerationRef.current
 
-      const context = audioContextRef.current
+    try {
+      const context = getAudioContext()
 
       if (context.state === 'suspended') {
         await context.resume()
       }
 
-      if (context.state !== 'running') return
+      if (
+        context.state !== 'running' ||
+        generation !== soundGenerationRef.current
+      ) {
+        return
+      }
+
+      const output = masterGainRef.current
+      if (!output) return
 
       const now = context.currentTime
-      const volume = soundVolume / 100
 
       if (type === 'incorrect') {
-        // A short electrical buzz for a mistake.
         const oscillator = context.createOscillator()
         const gain = context.createGain()
 
         oscillator.type = 'sawtooth'
-        oscillator.frequency.setValueAtTime(130, now)
-        oscillator.frequency.exponentialRampToValueAtTime(
-          65,
-          now + 0.09,
-        )
-
-        gain.gain.setValueAtTime(volume * 0.09, now)
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1)
+        oscillator.frequency.setValueAtTime(120, now)
+        oscillator.frequency.exponentialRampToValueAtTime(65, now + 0.08)
+        gain.gain.setValueAtTime(0, now)
+        gain.gain.linearRampToValueAtTime(0.12, now + 0.003)
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09)
 
         oscillator.connect(gain)
-        gain.connect(context.destination)
+        gain.connect(output)
+        activeSoundsRef.current.add(oscillator)
 
         oscillator.onended = () => {
+          activeSoundsRef.current.delete(oscillator)
           oscillator.disconnect()
           gain.disconnect()
         }
 
         oscillator.start(now)
-        oscillator.stop(now + 0.11)
+        oscillator.stop(now + 0.1)
         return
       }
 
-      // Filtered noise creates a short keyboard click.
-      const duration = 0.035
+      // A crisp click with a deeper key-bottoming-out sound.
+      const variation = 0.9 + Math.random() * 0.2
+      const isBackspace = type === 'backspace'
+      const duration = 0.055
       const buffer = context.createBuffer(
         1,
         Math.ceil(context.sampleRate * duration),
         context.sampleRate,
       )
-
       const samples = buffer.getChannelData(0)
 
       for (let index = 0; index < samples.length; index += 1) {
         samples[index] = Math.random() * 2 - 1
       }
 
-      const source = context.createBufferSource()
+      const click = context.createBufferSource()
       const filter = context.createBiquadFilter()
-      const gain = context.createGain()
+      const clickGain = context.createGain()
+      click.buffer = buffer
+      filter.type = 'bandpass'
+      filter.frequency.value = (isBackspace ? 1300 : 2200) * variation
+      filter.Q.value = 0.7
 
-      source.buffer = buffer
+      clickGain.gain.setValueAtTime(0, now)
+      clickGain.gain.linearRampToValueAtTime(0.6, now + 0.001)
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, now + duration)
+      click.connect(filter)
+      filter.connect(clickGain)
+      clickGain.connect(output)
 
-      filter.type = 'lowpass'
-      filter.frequency.value =
-        type === 'backspace' ? 900 : 1800 + Math.random() * 700
+      const body = context.createOscillator()
+      const bodyGain = context.createGain()
+      body.type = 'triangle'
+      body.frequency.setValueAtTime((isBackspace ? 160 : 210) * variation, now)
+      body.frequency.exponentialRampToValueAtTime(75, now + 0.035)
+      bodyGain.gain.setValueAtTime(0, now)
+      bodyGain.gain.linearRampToValueAtTime(0.3, now + 0.002)
+      bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.045)
+      body.connect(bodyGain)
+      bodyGain.connect(output)
 
-      gain.gain.setValueAtTime(volume * 0.16, now)
-      gain.gain.exponentialRampToValueAtTime(
-        0.0001,
-        now + duration,
-      )
+      activeSoundsRef.current.add(click)
+      activeSoundsRef.current.add(body)
 
-      source.connect(filter)
-      filter.connect(gain)
-      gain.connect(context.destination)
-
-      source.onended = () => {
-        source.disconnect()
+      click.onended = () => {
+        activeSoundsRef.current.delete(click)
+        click.disconnect()
         filter.disconnect()
-        gain.disconnect()
+        clickGain.disconnect()
       }
 
-      source.start(now)
-      source.stop(now + duration)
-    } catch {
-      // Typing still works if audio cannot start.
+      body.onended = () => {
+        activeSoundsRef.current.delete(body)
+        body.disconnect()
+        bodyGain.disconnect()
+      }
+
+      click.start(now)
+      click.stop(now + duration)
+      body.start(now)
+      body.stop(now + 0.05)
+    } catch (error) {
+      console.error('Typing sound could not play:', error)
     }
   }
 
@@ -319,7 +388,6 @@ function App() {
 
     if (status === 'finished') return
 
-    // Check the deadline on input too, including after a background tab.
     if (
       deadlineRef.current !== null &&
       performance.now() >= deadlineRef.current
@@ -335,7 +403,7 @@ function App() {
       }
 
       setTyped((previous) => {
-        // Backspace cannot cross a submitted space.
+        // Space submits a word, so Backspace cannot cross it.
         if (previous.endsWith(' ')) {
           return previous
         }
@@ -363,15 +431,17 @@ function App() {
 
     setTyped((previous) => previous + event.key)
 
-    // Add more words before the user reaches the end.
     if (passage.length - typed.length < 300) {
       setPassage((previous) => `${previous} ${generateWords(100)}`)
     }
   }
 
   function restartTest() {
+    stopSounds()
     setSavedBest(personalBest)
+
     deadlineRef.current = null
+
     setPassage(generateWords())
     setTyped('')
     setStatus('ready')
@@ -379,13 +449,37 @@ function App() {
     setAttempts(0)
     setCorrectAttempts(0)
 
-    // Wait for the typing area to return after the results screen.
     window.requestAnimationFrame(() => {
       if (typingRef.current) {
         typingRef.current.scrollTop = 0
         typingRef.current.focus()
       }
     })
+  }
+
+  function toggleSound() {
+    if (soundEnabled) {
+      stopSounds()
+
+      const context = audioContextRef.current
+      const gain = masterGainRef.current
+
+      if (context && gain && context.state !== 'closed') {
+        gain.gain.setValueAtTime(0, context.currentTime)
+      }
+    }
+
+    setSoundEnabled((previous) => !previous)
+  }
+
+  function changeVolume(event) {
+    const volume = Number(event.target.value)
+
+    if (volume === 0) {
+      stopSounds()
+    }
+
+    setSoundVolume(volume)
   }
 
   const statusLabel = {
@@ -424,22 +518,21 @@ function App() {
               className="sound-toggle"
               type="button"
               aria-pressed={soundEnabled}
-              onClick={() => setSoundEnabled((previous) => !previous)}
+              onClick={toggleSound}
             >
               Sound: {soundEnabled ? 'ON' : 'OFF'}
             </button>
 
             <label className="volume-control">
               <span>Volume</span>
+
               <input
                 type="range"
                 min="0"
                 max="100"
                 value={soundVolume}
                 disabled={!soundEnabled}
-                onChange={(event) =>
-                  setSoundVolume(Number(event.target.value))
-                }
+                onChange={changeVolume}
               />
             </label>
           </div>
@@ -453,8 +546,12 @@ function App() {
 
       <main className="test-container">
         <div className="test-heading">
-          <p className="eyebrow">SPEEDYFINGERS // TYPING TEST</p>
+          <p className="eyebrow">
+            SPEEDYFINGERS // TYPING TEST
+          </p>
+
           <h1>Let your fingers do the talking.</h1>
+
           <p className="description">
             Everyday words. Sixty seconds. Find your rhythm.
           </p>
@@ -462,13 +559,19 @@ function App() {
 
         <section className="test-panel" aria-label="Typing test">
           <div className="test-toolbar">
-            <span className="mode-label">ENGLISH / 60 SECONDS</span>
-            <span className="preview-label">{statusLabel}</span>
+            <span className="mode-label">
+              ENGLISH / 60 SECONDS
+            </span>
+
+            <span className="preview-label">
+              {statusLabel}
+            </span>
           </div>
 
           <div className="stats">
             <div className="stat">
               <span className="stat-label">TIME LEFT</span>
+
               <span
                 className={`stat-value timer ${
                   remaining <= 10 ? 'timer-urgent' : ''
@@ -481,6 +584,7 @@ function App() {
 
             <div className="stat">
               <span className="stat-label">WORDS / MIN</span>
+
               <span className="stat-value">
                 {status === 'ready' ? '—' : wpm}
               </span>
@@ -488,6 +592,7 @@ function App() {
 
             <div className="stat">
               <span className="stat-label">ACCURACY</span>
+
               <span className="stat-value">
                 {status === 'ready' ? '—' : `${accuracy}%`}
               </span>
@@ -495,8 +600,10 @@ function App() {
 
             <div className="stat">
               <span className="stat-label">PERSONAL BEST</span>
+
               <span className="stat-value">
                 {personalBest === null ? '—' : personalBest}
+
                 {personalBest !== null && (
                   <span className="unit">wpm</span>
                 )}
@@ -523,7 +630,10 @@ function App() {
             </div>
           ) : (
             <>
-              <p className="typing-hint" id="typing-instructions">
+              <p
+                className="typing-hint"
+                id="typing-instructions"
+              >
                 Click the words or press Tab to focus. Type to begin.
               </p>
 
@@ -550,6 +660,7 @@ function App() {
                       <span className="word" key={start}>
                         {Array.from(characters).map((character, index) => {
                           const characterPosition = start + index
+
                           const isCurrent =
                             characterPosition === typed.length
 
